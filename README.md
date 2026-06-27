@@ -1,0 +1,145 @@
+# fulltime_pos_emailer
+
+Forked from https://github.com/vatsalm30/internship_emailer
+
+A bot that **runs daily on GitHub Actions** and **emails you** **new US
+software / quant / consulting full-time openings**.
+It pulls from direct company career
+sites (via their ATS APIs), filters to what you care about, remembers what it has
+already shown you, and only alerts on **new** postings.
+
+```
+sources (Greenhouse/Lever/Ashby/Workday + optional community lists)
+   → normalize → filter (full-time · category · US)
+   → dedup vs data/seen_jobs.json
+   → email digest (Gmail)
+   → commit updated state back to the repo
+```
+
+> SMS (Twilio) is supported but **off by default** — this is an email-only setup.
+> To turn it on later, see "Optional: SMS" below.
+
+## What it tracks
+- **Roles:** full-time roles only; internships are excluded.
+- **Categories:** software engineering, software development, quant dev, quant
+  trading, big tech, unicorns, startups, consulting (tech tracks).
+- **Location:** United States (incl. US-remote).
+
+All of this is tunable in `config/` — no code changes needed.
+
+## Layout
+```
+config/        # all tunables (no code): companies, github lists, filters, settings
+src/sources/   # one module per source type (github lists + 4 ATS APIs)
+src/filters.py # full-time / category / US-location rules
+src/dedup.py   # seen-jobs state (data/seen_jobs.json)
+src/notify/    # email.py (Gmail SMTP) + sms.py (Twilio)
+src/apply/     # FUTURE auto-apply scaffold (not yet implemented)
+src/main.py    # orchestrator + CLI
+.github/workflows/daily.yml  # the daily cron
+tests/         # pytest: filters + dedup
+```
+
+## Quick start (local)
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# See what it would send today — fetches live sources, no email/SMS, no state write:
+python -m src.main --dry-run
+```
+
+Add credentials to send for real:
+```bash
+cp .env.example .env      # then fill in GMAIL_USER / GMAIL_APP_PASSWORD / EMAIL_TO
+python -m src.main --test-notify   # sends one sample email to verify creds
+python -m src.main                 # full run
+```
+
+**First-run tip:** with an empty `data/seen_jobs.json`, the first real run will
+email the *entire current backlog* (~hundreds of postings) in one digest. If you'd
+rather start clean and only get *new* postings from then on, seed the state once:
+```bash
+python -m src.main --seed   # marks everything currently open as "seen", sends nothing
+```
+
+Run the tests:
+```bash
+pytest
+```
+
+## Credentials
+Set these as **GitHub repo Secrets** (Settings → Secrets and variables → Actions),
+and/or in a local `.env` (see `.env.example`). With none set, the bot still runs in
+`--dry-run` and prints results.
+
+| Secret | What it is |
+| --- | --- |
+| `GMAIL_USER` | Gmail address to send from |
+| `GMAIL_APP_PASSWORD` | 16-char [App Password](https://myaccount.google.com/apppasswords) (needs 2FA on) — **not** your login password |
+| `EMAIL_TO` | where the digest goes (comma-separate for multiple) |
+
+That's the whole setup — email is free and needs no other accounts.
+
+## Deploy (private repo + daily cron)
+1. Create a **private** GitHub repo and push this project.
+2. Add the secrets above.
+3. (Optional) Run `python -m src.main --seed` locally once and commit the updated
+   `data/seen_jobs.json`, so your first scheduled email is a small delta rather than
+   the whole backlog.
+4. The workflow `.github/workflows/daily.yml` runs at **13:00 UTC daily** and also
+   on-demand from the **Actions tab** (`workflow_dispatch`, with a dry-run toggle).
+5. Each run commits the updated `data/seen_jobs.json` back to the repo, so the bot
+   remembers what it already sent.
+
+Notes:
+- Private-repo Actions get 2,000 free minutes/month; a run is ~1–2 min → effectively free.
+- GitHub disables scheduled workflows after **60 days of no repo activity** — the daily
+  state commit normally counts, but you can also re-trigger manually to keep it alive.
+- Adjust the time by editing the `cron:` line (it's in UTC).
+
+## Tuning
+- **`config/companies.yaml`** — add companies by ATS + token. Quant firms and
+  consulting are seeded here because the community lists skew SWE. Some seed tokens
+  are best-effort — run `--dry-run` and disable any that 404 (`enabled: false`).
+- **`config/github_lists.yaml`** — optional community source URLs. Disabled by default
+  in this copy because the inherited defaults are internship-only.
+- **`config/filters.yaml`** — full-time title excludes, category keywords, and US location terms.
+- **`config/settings.yaml`** — digest format, state pruning, suppression.
+
+## Optional: SMS
+This is an email-only setup, but an SMS-nudge channel (`src/notify/sms.py`, via
+Twilio) ships dormant. To enable it later:
+1. In `config/settings.yaml`, set `sms.enabled: true`.
+2. Uncomment `twilio>=8` in `requirements.txt` and reinstall.
+3. Add `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `SMS_TO` (E.164)
+   as secrets / `.env` values, and uncomment them in `.github/workflows/daily.yml`.
+
+It sends a short "N new full-time jobs today" text alongside the email digest. Twilio
+costs a few cents per message.
+
+## Auto-apply (local) — implemented
+`src/apply/` is a working local tool that opens Greenhouse / Lever / Ashby
+application forms in a real browser and fills your details. It defaults to
+**review before every submission**. Cover letters and auto-submit are explicit
+opt-ins because they transmit personal data to third parties.
+
+```bash
+pip install -r requirements.txt -r requirements-apply.txt
+python -m playwright install chromium
+python -m src.apply --prepare-only      # safe first run: fills but never submits
+python -m src.apply                     # fill + pause for your review before submit
+```
+
+Runs on your machine (not CI) so you can watch, solve CAPTCHAs, and review before
+submit. It needs your resume in `resumes/` and a filled `config/profile.yaml`
+(copy `config/profile.example.yaml`). If you opt in with `--cover-letter`, it uses
+`GEMINI_API_KEY` and sends job/profile context to Google. Every attempt is logged
+to `data/applications.json` so re-runs never double-apply.
+
+**See [APPLYING.md](APPLYING.md) for the full guide, modes, and what to provide.**
+
+## Legal / etiquette
+Uses official public JSON APIs (Greenhouse, Lever, Ashby, Workday) and open,
+community-maintained data — no scraping of LinkedIn/Indeed or other anti-bot sites.
+Requests are rate-limited and retried politely. Respect each site's Terms of Service.

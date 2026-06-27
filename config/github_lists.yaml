@@ -1,0 +1,13 @@
+# Community-maintained job aggregators.
+#
+# This copy uses a new-grad feed instead of the inherited internship defaults.
+
+enabled: true
+
+# JSON lists (SimplifyJobs-style listings.json schema).
+lists:
+  - name: vanshb03-new-grad-2027
+    url: https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/.github/scripts/listings.json
+
+# README markdown-table lists (Company | Role | Location | Posted | Visa | Apply).
+readme_tables: []
